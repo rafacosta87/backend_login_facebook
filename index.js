@@ -2,6 +2,7 @@
 //na linha 16 esta criando a tabela com suas respectivas colunas, se não existir ela cria no banco de dados. 
 //pesquisar referente o cors e perguntar sobre para Jadson, as questões que ele estava vendo no terminal da pagina. Perguntar qual é a melhor maneira de salvar o backend no github e qual nome ele daria.
 //a questão do if(err) que pega o primeiro erro dos endpoints , qual é mesmo esse erro?
+const { z } = require('zod')
 const express = require("express")
 const cors = require("cors")
 const sqlite3 = require("sqlite3").verbose()
@@ -31,16 +32,38 @@ app.get("/", (req, res) => {
     res.send("healthy")
 })
 
+const generos = [
+    "masculino", "feminino", "personalizado"
+]
+
+const BodyCadastroSchema = z.object({
+    nome: z.string({
+        required_error: "Campo obrigatório"
+    })
+        .min(1, "Campo obrigatório"),
+    sobrenome: z.string({
+        required_error: "Campo obrigatório"
+    })
+        .min(1, "Campo obrigatório"),
+    genero: z.enum(generos, { message: "Gênero inválido" }),
+    email: z.string()
+        .email({ message: "Email inválido" }),
+    senha: z.string({
+        required_error: "Campo obrigatório"
+    })
+        .min(6, { message: "Não pode ter menos de 6 caracteres" }),
+})
+
 app.post("/usuario", (req, res) => {
+    const verificacaoBody = BodyCadastroSchema.safeParse(req.body)
+    if (verificacaoBody.success == false) return res.status(422).json({ error: verificacaoBody.error.format() });
     const { nome, sobrenome, data_nascimento, genero, email, senha, imagem } = req.body
-    console.log(data_nascimento)
     const response = db.run(`INSERT INTO usuarios VALUES (NULL,?, ?, ?, ?, ?, ?, ?)`,
         [nome, sobrenome, data_nascimento, genero, email, senha, imagem],
         function (err) {
             if (err) {
                 return res.status(400).json({ error: err.message })
             }
-            console.log(this)
             res.status(201).json({
                 nome, sobrenome, data_nascimento, genero, email, senha, id: this.lastID
             })
@@ -104,6 +127,34 @@ app.post("/login", (req, res) => {
             res.json(rows)
         }
     )
+})
+
+app.put("/atualizar/:id", (req, res) => {
+
+    // const { u} = req.query
+    const { id } = req.params
+    const { nome, sobrenome, data_nascimento, genero, email, senha, imagem } = req.body
+    db.get(
+        "SELECT * FROM usuarios WHERE id=?",
+        [id],
+        (err, row) => {
+            if (err) {
+                return res.status(400).json({ error: err.message })
+            }
+            if (!row) {
+                return res.status(404).json({ error: "Usuário não encontrado" })
+            }
+            db.run(
+                "UPDATE usuarios SET nome = ?, sobrenome = ?, data_nascimento = ?, genero = ?, email = ?, senha = ?, imagem= ? WHERE id = ?",
+                [nome ?? row?.nome, sobrenome ?? row?.sobrenome, data_nascimento ?? row?.data_nascimento, genero ?? row?.genero, email ?? row?.email, senha ?? row?.senha, imagem ?? row?.imagem, id]
+
+            );
+            res.json({ message: "usuario atualizado com sucesso" })
+        }
+    )
+    // // Status: OK
+    // return res.json(Usuario de id=${id} atualizado com sucesso!)
+
 })
 
 app.listen(port, () => {
