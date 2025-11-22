@@ -1,14 +1,16 @@
+//na linha 13 esta criando o arquivo banco de dados, passamos o nome e endereço
+//na linha 16 esta criando a tabela com suas respectivas colunas, se não existir ela cria no banco de dados. 
+//pesquisar referente o cors e perguntar sobre para Jadson, as questões que ele estava vendo no terminal da pagina. Perguntar qual é a melhor maneira de salvar o backend no github e qual nome ele daria.
+//a questão do if(err) que pega o primeiro erro dos endpoints , qual é mesmo esse erro?
+const { z } = require('zod')
 const express = require("express")
 const cors = require("cors")
 const sqlite3 = require("sqlite3").verbose()
-const bodyParser = require('body-parser')
 
 const app = express()
-app.use(cors());
+app.use(cors())
 const port = 3000
 app.use(express.json())
-app.use(bodyParser.json({ limit: '10mb' })); // Aumentar limite para imagens grandes
-app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
 
 const db = new sqlite3.Database("./database.db", (err) => {
     if (err) console.error("Erro ao conectar o banco", err.message)
@@ -30,24 +32,40 @@ app.get("/", (req, res) => {
     res.send("healthy")
 })
 
-app.post('/usuario', (req, res) => {
+const generos = [
+    "masculino", "feminino", "personalizado"
+]
+
+const BodyCadastroSchema = z.object({
+    nome: z.string({
+        required_error: "Campo obrigatório"
+    })
+        .min(1, "Campo obrigatório"),
+    sobrenome: z.string({
+        required_error: "Campo obrigatório"
+    })
+        .min(1, "Campo obrigatório"),
+    genero: z.enum(generos, { message: "Gênero inválido" }),
+    email: z.string()
+        .email({ message: "Email inválido" }),
+    senha: z.string({
+        required_error: "Campo obrigatório"
+    })
+        .min(6, { message: "Não pode ter menos de 6 caracteres" }),
+})
+
+app.post("/usuario", (req, res) => {
+    const verificacaoBody = BodyCadastroSchema.safeParse(req.body)
+    if (verificacaoBody.success == false) return res.status(422).json({ error: verificacaoBody.error.format() });
     const { nome, sobrenome, data_nascimento, genero, email, senha, imagem } = req.body
     const response = db.run(`INSERT INTO usuarios VALUES (NULL,?, ?, ?, ?, ?, ?, ?)`,
         [nome, sobrenome, data_nascimento, genero, email, senha, imagem],
         function (err) {
             if (err) {
-                console.log(err)
                 return res.status(400).json({ error: err.message })
             }
-            // if (err === UNIQUE ) {
-            //     console.error(err, "email ja existe")
-            //     return res.status(400).json({ err: 'E-mail já cadastrado' });
-            // }
-            // if (err) {
-            //     return res.status(500).json({ err: 'Erro interno do servidor' });
-            // }
             res.status(201).json({
-                nome, sobrenome, data_nascimento, genero, email, senha, id: this.lastID, imagem
+                nome, sobrenome, data_nascimento, genero, email, senha, id: this.lastID
             })
         }
     )
@@ -142,3 +160,6 @@ app.put("/atualizar/:id", (req, res) => {
 app.listen(port, () => {
     console.log(`servidor rodando em http://localhost:${port}`)
 })
+
+
+
