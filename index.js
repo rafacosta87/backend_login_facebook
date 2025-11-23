@@ -2,7 +2,8 @@ const express = require("express")
 const cors = require("cors")
 const sqlite3 = require("sqlite3").verbose()
 const bodyParser = require('body-parser')
-
+const yup = require('yup')
+const { parse, isValid, isDate, isFuture, format } = require('date-fns');
 const app = express()
 app.use(cors());
 const port = 3000
@@ -26,32 +27,105 @@ db.run(`
         imagem TEXT 
     ) `)
 
+const dateFormat = 'dd/MM/yyyy';
+
+// Função utilitária de validação de data para o backend
+const validateDate = (value) => {
+  if (!value) return false;
+  const parsed = parse(value, dateFormat, new Date());
+  return isValid(parsed) && isDate(parsed);
+};
+
+const userSchemaBackend = yup.object().shape({
+  nome: yup.string(),
+  sobrenome: yup.string(),
+  email: yup.string(),
+  data_nascimento: yup.string()
+    .required('Data de nascimento é obrigatória')
+    .test('is-valid-date', 'Data não existe', validateDate)
+    .test('is-past-date', 'Data de nascimento não pode ser no futuro ', function(value) {
+      const parsedDate = parse(value, dateFormat, new Date());
+      // Permite data de hoje ou anterior
+      return !isFuture(parsedDate);
+    }),
+  genero: yup.string(),
+  senha: yup.string(),
+  imagem: yup.string(),
+});
+
 app.get("/", (req, res) => {
     res.send("healthy")
 })
 
-app.post('/usuario', (req, res) => {
-    const { nome, sobrenome, data_nascimento, genero, email, senha, imagem } = req.body
-    const response = db.run(`INSERT INTO usuarios VALUES (NULL,?, ?, ?, ?, ?, ?, ?)`,
-        [nome, sobrenome, data_nascimento, genero, email, senha, imagem],
+app.post('/usuario', async (req, res) => {
+   
+  try {
+     
+    const data = await userSchemaBackend.validate(req.body, { abortEarly: false });
+  
+    db.get('SELECT email FROM usuarios WHERE email = ?', [data.email], (err, row) => {
+      if (err) {
+        return res.status(500).json({ error: { message: 'Erro no servidor' } });
+      }
+      if (row) {
+        return res.status(400).json({
+          error: {
+            field: 'email',
+            message: 'Este email já está cadastrado',
+          },
+        });
+      }
+      const {  nome, sobrenome, data_nascimento, genero, email, senha, imagem  } = data;
+      db.run(
+        'INSERT INTO usuarios VALUES (NULL,?, ?, ?, ?, ?, ?, ?)',
+        [nome, sobrenome, data_nascimento, genero, email, senha, imagem], // Salva data como string YYYY-MM-DD
         function (err) {
-            if (err) {
-                console.log(err)
-                return res.status(400).json({ error: err.message })
-            }
-            // if (err === UNIQUE ) {
-            //     console.error(err, "email ja existe")
-            //     return res.status(400).json({ err: 'E-mail já cadastrado' });
-            // }
-            // if (err) {
-            //     return res.status(500).json({ err: 'Erro interno do servidor' });
-            // }
-            res.status(201).json({
-                nome, sobrenome, data_nascimento, genero, email, senha, id: this.lastID, imagem
-            })
+          if (err) {
+            console.log(err)
+            return res.status(500).json({ error: { message: 'Erro ao salvar usuário' } });
+          }
+          res.status(201).json({  nome, sobrenome, data_nascimento, genero, email, senha, id: this.lastID, imagem});
         }
-    )
-})
+      );
+    });
+  } catch (err) {
+    console.log(err)
+    if (err instanceof yup.ValidationError) {
+      return res.status(400).json({
+        error: {
+          field: err.path,
+          message: err.message,
+        },
+      });
+    }
+    res.status(500).json({ error: { message: 'Erro interno do servidor' } })
+  }
+});
+
+// app.post('/usuario', (req, res) => {
+  
+//     const data =  userSchemaBackend.validate(req.body, { abortEarly: false });
+//     const { nome, sobrenome, data_nascimento, genero, email, senha, imagem } = req.body
+//     const response = db.run(`INSERT INTO usuarios VALUES (NULL,?, ?, ?, ?, ?, ?, ?)`,
+//         [nome, sobrenome, data_nascimento, genero, email, senha, imagem],
+//         function (err) {
+//             if (err) {
+//                 console.log(err)
+//                 return res.status(400).json({ error: err.message })
+//             }
+//             // if (err === UNIQUE ) {
+//             //     console.error(err, "email ja existe")
+//             //     return res.status(400).json({ err: 'E-mail já cadastrado' });
+//             // }
+//             // if (err) {
+//             //     return res.status(500).json({ err: 'Erro interno do servidor' });
+//             // }
+//             res.status(201).json({
+//                 nome, sobrenome, data_nascimento, genero, email, senha, id: this.lastID, imagem
+//             })
+//         }
+//     )
+// })
 
 app.get("/usuario", (req, res) => {
     db.all(`SELECT * FROM usuarios `, [], (err, rows) => {
