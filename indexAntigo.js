@@ -1,15 +1,16 @@
+//na linha 13 esta criando o arquivo banco de dados, passamos o nome e endereço
+//na linha 16 esta criando a tabela com suas respectivas colunas, se não existir ela cria no banco de dados. 
+//pesquisar referente o cors e perguntar sobre para Jadson, as questões que ele estava vendo no terminal da pagina. Perguntar qual é a melhor maneira de salvar o backend no github e qual nome ele daria.
+//a questão do if(err) que pega o primeiro erro dos endpoints , qual é mesmo esse erro?
+const { z } = require('zod')
 const express = require("express")
 const cors = require("cors")
 const sqlite3 = require("sqlite3").verbose()
-const bodyParser = require('body-parser')
-const yup = require('yup')
-const { parse, isValid, isDate, isFuture, format } = require('date-fns')
+
 const app = express()
 app.use(cors())
 const port = 3000
 app.use(express.json())
-app.use(bodyParser.json({ limit: '10mb' })) // Aumentar limite para imagens grandes
-app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }))
 
 const db = new sqlite3.Database("./database.db", (err) => {
     if (err) console.error("Erro ao conectar o banco", err.message)
@@ -27,90 +28,48 @@ db.run(`
         imagem TEXT 
     ) `)
 
-const dateFormat = 'dd/MM/yyyy'
-
-// Função utilitária de validação de data para o backend
-const validateDate = (value) => {
-  if (!value) return false
-  const parsed = parse(value, dateFormat, new Date())
-  return isValid(parsed) && isDate(parsed)
-}
-
-const userSchemaBackend = yup.object().shape({
-  nome: yup.string(),
-  sobrenome: yup.string(),
-  email: yup.string(),
-  data_nascimento: yup.string()
-    .required('Data de nascimento é obrigatória')
-    .test('is-valid-date', 'Data não existe', validateDate)
-    .test('is-past-date', 'Data de nascimento não pode ser no futuro ', function(value) {
-      const parsedDate = parse(value, dateFormat, new Date())
-      // Permite data de hoje ou anterior
-      return !isFuture(parsedDate)
-    }),
-  genero: yup.string(),
-  senha: yup.string(),
-  imagem: yup.string(),
-});
-
 app.get("/", (req, res) => {
     res.send("healthy")
 })
 
-app.post('/usuario', async (req, res) => {
-   
-  try {
-     
-    const data = await userSchemaBackend.validate(req.body, { abortEarly: false })
-  
-    db.get('SELECT email FROM usuarios WHERE email = ?', [data.email], (err, row) => {
-      if (err) {
-        return res.status(500).json({ error: { message: 'Erro no servidor' } })
-      }
-      if (row) {
-        return res.status(400).json({
-          errors: [{
-            type: 'email',
-            message: 'Este email já está cadastrado',
-          }],
-        })
-      }
-      const {  nome, sobrenome, data_nascimento, genero, email, senha, imagem  } = data
-      db.run(
-        'INSERT INTO usuarios VALUES (NULL,?, ?, ?, ?, ?, ?, ?)',
-        [nome, sobrenome, data_nascimento, genero, email, senha, imagem], 
-        function (err) {
-          if (err) {
-            console.log(err)
-            return res.status(500).json({ error: { message: 'Erro ao salvar usuário' } })
-          }
-          res.status(201).json({  nome, sobrenome, data_nascimento, genero, email, senha, id: this.lastID, imagem})
-        }
-      )
+const generos = [
+    "masculino", "feminino", "personalizado"
+]
+
+const BodyCadastroSchema = z.object({
+    nome: z.string({
+        required_error: "Campo obrigatório"
     })
-  } catch (error) {
-    console.log(error)
-    // Tratamento de erros de validação do Yup
-    if (error instanceof yup.ValidationError) {
-      // Formata erros para melhor consumo no frontend, se necessário
-      return res.status(400).json({ message: 'Erros de validação', errors: error.inner })
-    }
-    res.status(500).json({ message: 'Erro no servidor' })
-  }
-});
-  // catch (err) {
-  //   // Lidar com erros de validação Yup no backend
-  //   if (err instanceof yup.ValidationError) {
-  //     // Retorna o primeiro erro de validação para o frontend processar ou um formato de erro genérico
-  //     return res.status(400).json({
-  //       error: {
-  //         field: err.path,
-  //         message: err.message,
-  //       },
-  //     });
-  //   }
-  //   res.status(500).json({ error: { message: 'Erro interno do servidor' } });
-  // }
+        .min(1, "Campo obrigatório"),
+    sobrenome: z.string({
+        required_error: "Campo obrigatório"
+    })
+        .min(1, "Campo obrigatório"),
+    genero: z.enum(generos, { message: "Gênero inválido" }),
+    email: z.string()
+        .email({ message: "Email inválido" }),
+    senha: z.string({
+        required_error: "Campo obrigatório"
+    })
+        .min(6, { message: "Não pode ter menos de 6 caracteres" }),
+})
+
+app.post("/usuario", (req, res) => {
+    const verificacaoBody = BodyCadastroSchema.safeParse(req.body)
+    if (verificacaoBody.success == false) return res.status(422).json({ error: verificacaoBody.error.format() });
+    const { nome, sobrenome, data_nascimento, genero, email, senha, imagem } = req.body
+    const response = db.run(`INSERT INTO usuarios VALUES (NULL,?, ?, ?, ?, ?, ?, ?)`,
+        [nome, sobrenome, data_nascimento, genero, email, senha, imagem],
+        function (err) {
+            if (err) {
+                return res.status(400).json({ error: err.message })
+            }
+            res.status(201).json({
+                nome, sobrenome, data_nascimento, genero, email, senha, id: this.lastID
+            })
+        }
+    )
+})
 
 app.get("/usuario", (req, res) => {
     db.all(`SELECT * FROM usuarios `, [], (err, rows) => {
@@ -201,3 +160,6 @@ app.put("/atualizar/:id", (req, res) => {
 app.listen(port, () => {
     console.log(`servidor rodando em http://localhost:${port}`)
 })
+
+
+
