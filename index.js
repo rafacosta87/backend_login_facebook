@@ -3,7 +3,7 @@ const cors = require("cors")
 const sqlite3 = require("sqlite3").verbose()
 const bodyParser = require('body-parser')
 const yup = require('yup')
-const { parse, isValid, isDate, isFuture, format } = require('date-fns')
+const { parse, isValid, isDate, isFuture, format, subYears } = require('date-fns')
 const app = express()
 app.use(cors())
 const port = 3000
@@ -36,21 +36,36 @@ const validateDate = (value) => {
   return isValid(parsed) && isDate(parsed)
 }
 
+const fiveYearsAgo = subYears(new Date(), 5)
+
 const userSchemaBackend = yup.object().shape({
-  nome: yup.string(),
-  sobrenome: yup.string(),
-  email: yup.string(),
+  nome: yup.string().nullable(),
+  sobrenome: yup.string().nullable(),
+  email: yup.string().nullable().email("Digite um email válido"),
   data_nascimento: yup.string()
-    .required('Data de nascimento é obrigatória')
-    .test('is-valid-date', 'Data não existe', validateDate)
-    .test('is-past-date', 'Data de nascimento não pode ser no futuro ', function (value) {
-      const parsedDate = parse(value, dateFormat, new Date())
-      // Permite data de hoje ou anterior
-      return !isFuture(parsedDate)
+    .nullable()
+    .matches(
+      /^([0-9]?[0-9])\/([0-9]?[0-9])\/\d{4}$/,
+      'Formato de data esperado: 00/00/0000'
+    )
+    .test('is-valid-date', 'Data não existe', function (value) {
+      if (!value) return true;
+      return validateDate(value);
+    })
+    .test('is-past-date', 'Data de nascimento não pode ser no futuro', function (value) {
+      if (!value) return true;
+      const parsedDate = parse(value, dateFormat, new Date());
+      return !isFuture(parsedDate);
+    })
+    .test('is-older-than-5', 'Você deve ter mais de 5 anos', function (value) {
+      if (!value) return true;
+      const parsedDate = parse(value, dateFormat, new Date());
+      // Retorna verdadeiro se a data analisada for anterior (ou igual, dependendo da necessidade) a fiveYearsAgo
+      return parsedDate <= fiveYearsAgo;
     }),
-  genero: yup.string(),
-  senha: yup.string(),
-  imagem: yup.string(),
+  genero: yup.string().nullable().oneOf(['masculino', 'feminino', 'personalizado'], 'Gênero inválido'),
+  senha: yup.string().nullable().min(6, 'A senha deve ter pelo menos 6 caracteres'),
+  imagem: yup.string().nullable(),
 });
 
 app.get("/", (req, res) => {
@@ -108,6 +123,96 @@ app.post('/usuario', async (req, res) => {
 //   }
 //   res.status(500).json({ error: { message: 'Erro interno do servidor' } });
 // }
+
+app.put("/atualizar/:id", async (req, res) => {
+  const { id } = req.params;
+  const { nome, sobrenome, data_nascimento, genero, email, senha, imagem } = req.body;
+  try {
+    // 1. Valida os dados de entrada com o esquema Yup
+    await userSchemaBackend.validate(req.body, { abortEarly: false, strict: true });
+    // 2. Verifica se o email fornecido já existe no banco de dados, excluindo o usuário atual
+    if (email) { // Só verifica se o email está presente no corpo da requisição
+      const userWithSameEmail = await new Promise((resolve, reject) => {
+        db.get(
+          "SELECT id FROM usuarios WHERE email = ? AND id != ?",
+          [email, id],
+          (err, row) => {
+            if (err) reject(err);
+            resolve(row);
+          }
+        );
+      });
+
+      if (userWithSameEmail) {
+        return res.status(409).json({ // 409 Conflict é um código de status apropriado para duplicação
+          // error: "Erro de conflito",
+          // details: ["Este email já está cadastrado para outro usuário."]
+                errors: [{
+            path: 'email',
+            message: 'Este email já está cadastrado',
+          }],
+        });
+      }
+    }
+  } catch (err) {
+    console.log(err)
+    // Tratamento de erros de validação do Yup
+    if (err instanceof yup.ValidationError) {
+      // Formata erros para melhor consumo no frontend, se necessário
+      return res.status(400).json({ message: 'Erros de validação', errors: err.inner })
+    }
+    res.status(500).json({ message: 'Erro no servidor' })
+  }
+  //  (err) {
+  //   console.log(err)
+  //   // Se a validação do Yup falhar, retorna um erro 400
+  //   if (err.name === 'ValidationError') {
+  //     return res.status(400).json({
+  //       error: "Erro de validação",
+  //       details: err.errors
+  //     });
+  //   }
+  //   // Para outros erros (como erro de banco de dados na Promise)
+  //   return res.status(500).json({ error: err.message });
+  // }
+  // // 3. Busca o usuário existente para aplicar a lógica de fallback (se campos não forem fornecidos)
+  db.get(
+    "SELECT * FROM usuarios WHERE id=?",
+    [id],
+    (err, row) => {
+      if (err) {
+        return res.status(400).json({ error: err.message });
+      }
+      if (!row) {
+        return res.status(404).json({ error: "Usuário não encontrado" });
+      }
+      // 4. Executa a atualização
+      db.run(
+        "UPDATE usuarios SET nome = ?, sobrenome = ?, data_nascimento = ?, genero = ?, email = ?, senha = ?, imagem= ? WHERE id = ?",
+        [
+          nome ?? row.nome,
+          sobrenome ?? row.sobrenome,
+          data_nascimento ?? row.data_nascimento,
+          genero ?? row.genero,
+          email ?? row.email,
+          senha ?? row.senha,
+          imagem ?? row.imagem,
+          id
+        ],
+        function (updateErr) {
+          if (updateErr) {
+            // Em caso de erro no UPDATE (ex: constraint violation não pega antes), loga e retorna
+            console.error(updateErr);
+            return res.status(400).json({ error: updateErr.message });
+          }
+          res.json({ message: "Usuário atualizado com sucesso", changes: this.changes });
+        }
+      );
+    }
+  );
+});
+
+
 
 app.get("/usuario", (req, res) => {
   db.all(`SELECT * FROM usuarios `, [], (err, rows) => {
@@ -167,39 +272,11 @@ app.post("/login", (req, res) => {
     }
     if (user.senha !== senha) {
       // A senha está incorreta
-      return res.status(401).json({ error: "Senha incorreta" , field: "senha"});
+      return res.status(401).json({ error: "Senha incorreta", field: "senha" });
     }
     res.status(200).json(user);
   });
 });
-
-app.put("/atualizar/:id", (req, res) => {
-
-  // const { u} = req.query
-  const { id } = req.params
-  const { nome, sobrenome, data_nascimento, genero, email, senha, imagem } = req.body
-  db.get(
-    "SELECT * FROM usuarios WHERE id=?",
-    [id],
-    (err, row) => {
-      if (err) {
-        return res.status(400).json({ error: err.message })
-      }
-      if (!row) {
-        return res.status(404).json({ error: "Usuário não encontrado" })
-      }
-      db.run(
-        "UPDATE usuarios SET nome = ?, sobrenome = ?, data_nascimento = ?, genero = ?, email = ?, senha = ?, imagem= ? WHERE id = ?",
-        [nome ?? row?.nome, sobrenome ?? row?.sobrenome, data_nascimento ?? row?.data_nascimento, genero ?? row?.genero, email ?? row?.email, senha ?? row?.senha, imagem ?? row?.imagem, id]
-
-      );
-      res.json({ message: "usuario atualizado com sucesso" })
-    }
-  )
-  // // Status: OK
-  // return res.json(Usuario de id=${id} atualizado com sucesso!)
-
-})
 
 app.listen(port, () => {
   console.log(`servidor rodando em http://localhost:${port}`)
